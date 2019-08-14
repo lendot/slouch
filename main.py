@@ -9,76 +9,108 @@
 # MIT License (https://opensource.org/licenses/MIT)
 import time
 import math
-#from adafruit_circuitplayground.express import cpx
-import audioio
-import board
-import digitalio
+from adafruit_circuitplayground.express import cpx
  
 SLOUCH_ANGLE    = 7.0
 SLOUCH_TIME     = 3
 GRAVITY         = 9.80665
 
 # if present, use this PCM file as the alarm sound
+# file must be a 22kHz or lower 16-bit mono .wav
 ALARM_SOUND_FILE = 'alarm.wav'
+
 # set to True to immediately loop alarm sound without pausing
 LOOP_ALARM = False
-
-# Whether we're using the built-in tones (False) or a sound file (True)
-alarm_wave = False
 
 # Initialize target angle to zero
 target_angle = 0
 slouching = False
 
 
-def init_audio():
-    # make sure the speaker is enabled
-    speaker_enable = digitalio.DigitalInOut(board.SPEAKER_ENABLE)
-    speaker_enable.switch_to_output(value=True)
+# number of readings to smooth over
+NUM_READINGS = 5
+
+angle_readings = [0]*NUM_READINGS
+reading_idx = 0
+
+
+# see whether there's an alam sound file to play
+# Is there a better way to do this? CircuitPython doesn't have os.path
+try:
+    test_file = open(ALARM_SOUND_FILE,"rb")
+    test_file.close()
+    alarm_wave = True
+except:
+    alarm_wave = False
+
 
 def sound_alarm():
-    global alarm_wave,audio,wave
     if alarm_wave:
         # play the pcm data
-        print("Playing pcm alarm")
-        audio.play(wave)
-        while audio.playing:
-            pass
-        print("done")
+        cpx.play_file(ALARM_SOUND_FILE)
     else:
-        pass
-        # Play a tone
-        #cpx.play_tone(800, 0.5)
+        # play a tone
+        cpx.play_tone(800,0.5)
 
+# return a smoothing of readings--highest/lowest readings ignored, remainder averaged
+def smoothed_reading(values):
+    min_idx=-1
+    max_idx=-1
+    min_value=1000
+    max_value=-1000
+    for i in range(len(values)):
+        val=values[i]
+        if val > max_value:
+            max_value=val
+            max_idx=i
+        if val < min_value:
+            min_value=val
+            min_idx=i
+    n=0
+    acc=0.0
+#    print ("(min,max) = "+str(min_value)+","+str(max_value)+")")
+    for i in range(len(values)):
+        if i==min_idx or i==max_idx:
+#            print("ignoring "+str(values[i]))
+            continue
+        acc+=values[i]
+        n+=1
+    return acc/n
 
-# prepare alarm sound file, if we have one
-try:
-    wave_file = open(ALARM_SOUND_FILE,"rb")
-    wave = audioio.WaveFile(wave_file)
-    audio = audioio.AudioOut(board.A0)
-    alarm_wave = True
-    print("Using wav file")
-except:
-    # couldn't open alarm file; fall back to built-in tones
-    alarm_wave = False
-    print("Using tone generator")
-    
+# get the angle from the current accelerometer reading
+def get_angle():
+    angle_reading = math.asin(-cpx.acceleration[2] / GRAVITY)
+    return math.degrees(angle_reading)
+        
+# prime the accelerometer readings buffer
+for i in range(NUM_READINGS):
+    angle_readings[i] = get_angle()
 
-init_audio()
-sound_alarm()
+# signal initialization is done    
+cpx.play_tone(1000,0.2)
         
 # Loop forever
 while True:
-    time.sleep(1)
-    pass
-'''
-    # Compute current angle
-    current_angle = math.asin(-cpx.acceleration[2] / GRAVITY)
-    current_angle = math.degrees(current_angle)
+
+    if not slouching:
+        angle_reading = get_angle()
+        angle_readings[reading_idx] = angle_reading
+        reading_idx += 1
+        if reading_idx >= NUM_READINGS:
+            reading_idx = 0
+    else:
+        # sounds play synchronously so we need to take readings in rapid succession in this loop
+        for i in range(NUM_READINGS):
+            angle_readings[i] = get_angle()
+        reading_idx = 0
+
+    current_angle = smoothed_reading(angle_readings)
+#    print(current_angle)
     
     # Set target angle on button press
     if cpx.button_a or cpx.button_b:
         target_angle = current_angle
+        print("New target_angle: "+str(target_angle))
         cpx.play_tone(900, 0.1)
         time.sleep(0.1)
         cpx.play_tone(900, 0.1)
@@ -100,4 +132,3 @@ while True:
             sound_alarm()
             if not LOOP_ALARM:
                 time.sleep(0.3)
-'''
